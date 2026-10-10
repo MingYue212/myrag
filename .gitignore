@@ -1,0 +1,21 @@
+# 密钥配置，绝不提交
+.env
+
+# 知识库数据（含向量与图谱，通常体积较大）
+data/knowledge/
+
+# 入库的原始资料
+input/
+
+# 日志
+*.log
+lightrag.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 编辑器
+.DS_Store
+.idea/
