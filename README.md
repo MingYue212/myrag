@@ -1,26 +1,44 @@
 # 个人 RAG 知识库
 
-基于 **LightRAG** 的知识库，模型走阿里云百炼 API。
+基于 **LightRAG** 的知识库。三路模型混搭，各自取所长：
 
-- LLM：`qwen-plus`（实体抽取、关键词抽取、答案生成）
-- Embedding：`text-embedding-v3`（1024 维）
-- Reranker：`gte-rerank-v2`（交叉编码器精排，收益最大的一项）
+| 用途 | 模型 | 位置 | 为什么这么配 |
+|---|---|---|---|
+| Embedding | `bge-m3`（1024 维） | **本地** Ollama | 换 API 会导致向量空间不兼容、需重建知识库；本地也避免文档内容外泄 |
+| LLM | 中转站模型 | **API** | 抽取质量决定知识图谱质量，量小但要求高 |
+| Reranker | `gte-rerank-v2` | **API** 阿里云 | 收益最大的一项，交叉编码器精排 |
+| VLM | `qwen-vl-max` | **API** 阿里云 | 仅处理 PDF 内嵌图片，日常关闭 |
+
 - 存储：JSON 文件落盘，可直接备份、可 git 管理
 - 服务地址：<http://127.0.0.1:9621>
 
-## ⚠️ 首次使用必须先填密钥
+## ⚠️ 首次使用必须先配密钥
 
-编辑 `.env`，把三处 `在这里填你的阿里云APIKey` 替换成真实 key：
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+编辑 `.env`，替换三处占位符：
 
 ```
-LLM_BINDING_API_KEY=sk-xxx
-EMBEDDING_BINDING_API_KEY=sk-xxx
-RERANK_BINDING_API_KEY=sk-xxx
+LLM_BINDING_API_KEY=sk-xxx           # 中转站
+LLM_BINDING_HOST=https://你的中转站域名/v1
+LLM_MODEL=你的中转站支持的模型名
+
+RERANK_BINDING_API_KEY=sk-xxx         # 阿里云
+VLM_LLM_BINDING_API_KEY=sk-xxx       # 阿里云（用 VLM 时才需填）
 ```
 
 **注意：LightRAG 用 `load_dotenv(override=False)`，不支持 `${VAR}` 变量插值**，必须填字面值。
 
-**换embedding 模型必须重建知识库。** 向量空间不兼容，旧文档的向量无法与新模型的查询向量比较。从本地 bge-m3 换成 API 的 text-embedding-v3 后，需要清空 `data/knowledge/` 重新入库：
+Embedding 走本地，需要先装 Ollama 并拉模型：
+
+```bash
+ollama pull bge-m3
+```
+
+**换 embedding 模型必须重建知识库。** 向量空间不兼容，旧文档的向量无法与新模型的查询向量比较：
 
 ```bash
 mv data/knowledge data/knowledge.bak-bge-m3   # 备份而非删除
@@ -30,9 +48,10 @@ mv data/knowledge data/knowledge.bak-bge-m3   # 备份而非删除
 ## 快速开始
 
 ```bash
-./scripts/start.sh             # 启动服务
-./scripts/ingest.sh                # 扫描 input/ 并入库
-./scripts/ask.py "你的问题"        # 提问
+./scripts/start.sh                     # 启动服务
+./scripts/ingest.sh                    # 扫描 input/ 并入库
+./scripts/ask.py "你的问题"            # 提问
+./scripts/list_docs.py                 # 列出文档（删除时需要 doc_id）
 ```
 
 ## 目录约定
@@ -122,7 +141,7 @@ CHUNK_OVERLAP_SIZE=150
 
 **什么时候该调大 `CHUNK_P_SIZE`：** 单个章节内容很长、检索时经常答不全。调大到 1600～2000 更稳，但注意必须 ≤ `EMBEDDING_TOKEN_LIMIT`（8192）。
 
-**代码文件：** 按段落切分通常没问题。但如果投喂整个代码仓库（单文件上万行），建议改`CHUNKING_STRATEGY=recursive`，它会按语法边界切，不会把函数切成两半。
+**代码文件：** 按段落切分通常没问题。但如果投喂整个代码仓库（单文件上万行），建议改 `CHUNKING_STRATEGY=recursive`，它会按语法边界切，不会把函数切成两半。
 
 ### 实体抽取质量差
 
@@ -150,7 +169,7 @@ PyPI 版不含前端。需要图形界面就自行构建，或直接用 `http://
 
 **如何删除某篇文档？**
 
-删除接口要的是 `doc_ids`，不是文件名。先查出doc_id：
+删除接口要的是 `doc_ids`，不是文件名。先查出 doc_id：
 
 ```bash
 ./scripts/list_docs.py
@@ -170,18 +189,36 @@ curl -X DELETE http://127.0.0.1:9621/documents/delete_document \
 
 LightRAG 会把已处理的原始文件移到 `input/__parsed__/`。这是正常行为 —— 文件移走后再扫描会被识别为已处理并跳过，避免重复抽取。
 
-## 关于图片存 MinIO
+## 关于图片与 VLM
 
-**当前不需要。** MinIO 解决的是「图片从哪存、检索结果怎么引用」的问题，你这套暂时用不上：
+**当前默认关闭 VLM**（`VLM_PROCESS_ENABLE=false`），因为 md 和代码文件里没有图片，开着只是浪费。LightRAG 默认只做文本抽取，PDF 里的插图会被忽略（只取文字层）。
 
-- **LightRAG 不抽图片**。它只做文本抽取，`input/` 里的 md / 代码文件本来就没有图片，PDF 里的插图会被忽略（只取文字层）。
-- **没有图片就没有引用需求**。你企业版那套要 MinIO，是因为用了 MinerU 抽 PDF 图片、要存MinIO、再在答案里回填图片链接。这套链路在轻量版里不存在。
+**需要读带图 PDF 时，正确的做法是让 VLM 直接看，而不是引入 MinIO。** 图片理解在模型侧完成，不需要对象存储这一层 —— MinIO 解决的是「图片存哪、答案里怎么引用链接」，而 VLM 路线整个绕开了这个问题。
 
-**什么时候才需要？** 如果将来要处理扫描版PDF 或带大量图表的资料，并且希望在答案里看到图片，那就得上MinIO（或其他对象存储）。但更简单的做法是：**用支持视觉的模型直接读 PDF** —— LightRAG 1.5.7 支持配`VLM_LLM_BINDING` 指向 `qwen-vl-max`，图片理解交给模型，不落对象存储。当前配置里已留好位置。
+**开启 VLM 有两个必要条件，缺一个都不生效：**
+
+1. `VLM_PROCESS_ENABLE=true`
+2. 解析规则要带 `i` 选项，否则图片分析根本不会被触发：
+
+```bash
+LIGHTRAG_PARSER=*:native-tePi
+```
+
+⚠️ 坑在于：**不带 `i` 规则时，命中图片分析开关的文档不是被跳过，而是直接判为失败**（报 "VLM analysis required but VLM role is not available"）。默认的 `*:native-teP` 也不含 `i`。
+
+**VLM 调阿里云 qwen-vl-max：**
+
+```bash
+VLM_PROCESS_ENABLE=true
+VLM_LLM_BINDING=openai
+VLM_LLM_BINDING_HOST=https://dashscope.aliyuncs.com/compatible-mode/v1
+VLM_LLM_BINDING_API_KEY=sk-xxx
+VLM_LLM_MODEL=qwen-vl-max
+```
 
 ## 后续可做
 
-- **换更强模型**：抽取质量不满意时改`LLM_MODEL=qwen-max`
+- **换更强模型**：抽取质量不满意时，在中转站换更擅长结构化输出的模型
 - **接 MCP**：让 IDE 里的 AI 助手直接查这个知识库
-- **PDF 支持**：需要读扫描版时配 VLM，而非引入 MinIO
+- **PDF 支持**：按上面「关于图片与 VLM」开启 VLM
 - **定期归档**：`input/__parsed__/` 里的文件可清空；同名文件重新扫描会按哈希跳过
