@@ -1,7 +1,10 @@
 #!/bin/bash
 # 启动个人 RAG 知识库
 set -e
-cd "$(dirname "$0")"
+
+# 必须切到项目根目录而非 scripts/：LightRAG 按当前工作目录找 .env，
+# 在 scripts/ 下启动会找不到配置，并弹交互式确认（导致挂起）
+cd "$(dirname "$0")/.."
 
 export PATH="/Users/liushuang/.local/bin:$PATH"
 
@@ -10,7 +13,7 @@ export PATH="/Users/liushuang/.local/bin:$PATH"
 # 因其临时中转目录不可写而抛 SystemExit，把整个服务带崩。
 unset PYTHONPATH
 
-# 检查 Ollama 是否在运行
+# 检查 Ollama 是否在运行（embedding 用本地 bge-m3，必须有Ollama）
 if ! curl -s --max-time 3 http://localhost:11434/api/version > /dev/null 2>&1; then
     echo "Ollama 未运行，正在启动..."
     nohup ollama serve > /tmp/ollama_serve.log 2>&1 &
