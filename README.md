@@ -49,10 +49,27 @@ mv data/knowledge data/knowledge.bak-bge-m3   # 备份而非删除
 
 ```bash
 ./scripts/start.sh                     # 启动服务
+open web/index.html                     # 打开网页界面
 ./scripts/ingest.sh                    # 扫描 input/ 并入库
-./scripts/ask.py "你的问题"            # 提问
+./scripts/ask.py "你的问题"            # 命令行提问
 ./scripts/list_docs.py                 # 列出文档（删除时需要 doc_id）
 ```
+
+## 网页界面
+
+`web/index.html` 是单文件零依赖界面，双击即可用（无需构建、无需装包）。
+
+- 流式输出，答案逐字呈现
+- 四个检索模式一键切换（综合 / 均衡 / 细节 / 概括）
+- 侧栏列出所有文档及状态，点文档名即就该文件提问
+- 每个答案标注来源文件
+- 头部实时显示当前模型配置与服务连接状态
+
+界面通过 `http://127.0.0.1:9621` 调后端，需先启动服务。LightRAG 默认 `CORS Origins: *`，
+所以 `file://` 直接打开不会被拦。
+
+> ⚠️ 该服务的 `/query/stream` 返回的是**裸 JSON 逐行输出**，不是标准 SSE 格式。
+> 若要自己接前端，注意按行解析而非按 `data:` 前缀切分。
 
 ## 目录约定
 

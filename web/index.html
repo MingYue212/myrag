@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的知识库</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --surface-2: #f1efe8;
+    --border: rgba(0,0,0,0.12);
+    --text: #2c2c2a;
+    --text-2: #5f5e5a;
+    --text-3: #888780;
+    --accent: #0f6e56;
+    --accent-soft: #e1f5ee;
+    --danger: #a32d2d;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  h1 { font-size: 15px; font-weight: 500; }
+  .stat { font-size: 12px; color: var(--text-3); }
+  .stat b { color: var(--text-2); font-weight: 500; }
+  .spacer { flex: 1; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); margin-right: 5px; vertical-align: middle; }
+  .dot.on { background: #1d9e75; }
+  .dot.off { background: var(--danger); }
+  button {
+    font-family: inherit; font-size: 13px; color: var(--text-2);
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  }
+  button:hover { background: var(--surface-2); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  main { flex: 1; display: flex; overflow: hidden; }
+  .side {
+    width: 260px; flex-shrink: 0; background: var(--surface);
+    border-right: 1px solid var(--border); overflow-y: auto; padding: 16px;
+  }
+  .side h2 { font-size: 13px; font-weight: 500; margin-bottom: 10px; color: var(--text-2); }
+  .doc {
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; margin-bottom: 3px; word-break: break-all;
+  }
+  .doc:hover { background: var(--surface-2); }
+  .doc.sel { background: var(--accent-soft); color: var(--accent); }
+  .doc .st { font-size: 11px; color: var(--text-3); display: block; margin-top: 2px; }
+  .mode { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
+  .mode button { padding: 5px 9px; font-size: 12px; }
+  .mode button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tag {
+    display: inline-block; font-size: 11px; padding: 1px 7px;
+    border-radius: 10px; background: var(--surface-2); color: var(--text-2);
+  }
+  .chat { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .log { flex: 1; overflow-y: auto; padding: 24px; }
+  .empty { max-width: 520px; margin: 60px auto; text-align: center; color: var(--text-3); }
+  .empty h3 { font-size: 15px; font-weight: 500; color: var(--text-2); margin-bottom: 8px; }
+  .msg { max-width: 780px; margin: 0 auto 20px; }
+  .q {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 16px; margin-bottom: 10px;
+  }
+  .a {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 18px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .meta { font-size: 12px; color: var(--text-3); margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .refs { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .refs span {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .cursor { display: inline-block; width: 7px; height: 15px; background: var(--accent); animation: b 1s infinite; vertical-align: text-bottom; }
+  @keyframes b { 0%,50% { opacity: 1 } 51%,100% { opacity: 0 } }
+  .bar { border-top: 1px solid var(--border); background: var(--surface); padding: 14px 24px; flex-shrink: 0; }
+  form { max-width: 780px; margin: 0 auto; display: flex; gap: 10px; }
+  input {
+    flex: 1; font-family: inherit; font-size: 14px; padding: 11px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); color: var(--text);
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button.go {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+    padding: 0 22px; font-size: 14px;
+  }
+  button.go:hover { background: #0c5a46; }
+  .err { color: var(--danger); font-size: 13px; padding: 0 24px 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>我的知识库</h1>
+  <div class="stat" id="stat"></div>
+  <div class="spacer"></div>
+  <div class="stat"><span class="dot" id="dot"></span><span id="svc">连接中</span></div>
+  <button onclick="loadDocs()">刷新</button>
+</header>
+<main>
+  <aside class="side">
+    <h2>检索模式</h2>
+    <div class="mode" id="modes"></div>
+    <h2>文档<span class="tag" id="cnt"></span></h2>
+    <div id="docs"></div>
+  </aside>
+  <section class="chat">
+    <div class="log" id="log">
+      <div class="empty" id="empty">
+        <h3>提问开始</h3>
+        <div>知识库会检索你的文档后回答，每个答案都标注来源。</div>
+      </div>
+    </div>
+    <div class="err" id="err" style="display:none"></div>
+    <div class="bar">
+      <form onsubmit="ask(event)">
+        <input id="q" placeholder="问点什么…" autocomplete="off" autofocus>
+        <button class="go" type="submit" id="send">提问</button>
+      </form>
+    </div>
+  </section>
+</main>
+<script>
+const API = "http://127.0.0.1:9621";
+const MODES = [
+  ["mix", "综合"],
+  ["hybrid", "均衡"],
+  ["local", "细节"],
+  ["global", "概括"],
+];
+let mode = "mix";
+let busy = false;
+
+document.getElementById("modes").innerHTML = MODES.map(([k, n]) =>
+  `<button class="${k === mode ? "on" : ""}" onclick="setMode('${k}')">${n}</button>`
+).join("");
+
+function setMode(k) {
+  mode = k;
+  document.querySelectorAll("#modes button").forEach((b, i) =>
+    b.classList.toggle("on", MODES[i][0] === k));
+}
+
+async function ping() {
+  try {
+    const r = await fetch(API + "/health");
+    const d = await r.json();
+    document.getElementById("dot").className = "dot on";
+    document.getElementById("svc").textContent = d.status === "healthy" ? "已连接" : d.status;
+    const c = d.configuration || {};
+    document.getElementById("stat").innerHTML =
+      `模型 <b>${c.llm_model || "-"}</b> · 向量 <b>${c.embedding_model || "-"}</b>` +
+      (c.enable_rerank ? ` · 精排 <b>${c.rerank_model}</b>` : "");
+    return true;
+  } catch {
+    document.getElementById("dot").className = "dot off";
+    document.getElementById("svc").textContent = "未连接";
+    return false;
+  }
+}
+
+async function loadDocs() {
+  try {
+    const r = await fetch(API + "/documents/paginated", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page: 1, page_size: 200 }),
+    });
+    const d = await r.json();
+    let items = d.documents || d.items || d;
+    if (d.data && !Array.isArray(d.data)) items = d.data.documents || d.data.items || [];
+    if (!Array.isArray(items)) items = [];
+    document.getElementById("cnt").textContent = items.length;
+    const names = { processed: "已入库", failed: "失败", pending: "等待",
+                    processing: "处理中", parsing: "解析中" };
+    document.getElementById("docs").innerHTML = items.map(x =>
+      `<div class="doc" onclick="askAbout('${String(x.file_path || "").split("/").pop()}')">
+         ${x.file_path || "?"}
+         <span class="st">${names[x.status] || x.status || ""}</span>
+       </div>`).join("") || '<div class="stat">暂无文档</div>';
+  } catch (e) {
+    document.getElementById("docs").innerHTML = '<div class="stat">读取失败</div>';
+  }
+}
+
+function askAbout(name) {
+  document.getElementById("q").value = `${name} 里讲了什么？`;
+  ask();
+}
+
+function el(tag, cls, html) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  return e;
+}
+
+function push(html) {
+  const log = document.getElementById("log");
+  log.querySelector(".empty")?.remove();
+  log.appendChild(el("div", "msg", html));
+  log.scrollTop = log.scrollHeight;
+  return log;
+}
+
+async function ask(ev) {
+  if (ev) ev.preventDefault();
+  const q = document.getElementById("q").value.trim();
+  if (!q || busy) return;
+  if (!(await ping())) return alert("服务未连接，请先运行 ./scripts/start.sh");
+
+  busy = true;
+  document.getElementById("send").disabled = true;
+  document.getElementById("err").style.display = "none";
+  document.getElementById("q").value = "";
+
+  const log = push(`<div class="q">${esc(q)}</div><div class="a"><span class="cursor"></span></div>`);
+  const box = log.querySelector(".a");
+  const t0 = Date.now();
+  let text = "";
+  let refs = [];
+
+  try {
+    const resp = await fetch(API + "/query/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q, query_mode: mode, response_type: "Multiple Paragraphs" }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+
+      // 该服务的流式返回是裸 JSON（每行一个），并非标准 SSE，
+      // 所以不能按 data: 前缀切分，要按行解析并处理跨 chunk 截断
+      const lines = buf.split("\n");
+      buf = lines.pop();
+
+      for (const line of lines) {
+        const s = line.trim().replace(/^data:\s*/, "");
+        if (!s || s === "[DONE]") continue;
+        let ev;
+        try { ev = JSON.parse(s); } catch { continue; }
+        if (typeof ev.response === "string") {
+          text = ev.response;
+          box.innerHTML = esc(text) + '<span class="cursor"></span>';
+          log.scrollTop = log.scrollHeight;
+        }
+        if (ev.references) refs = ev.references;
+        if (ev.error) throw new Error(String(ev.error));
+      }
+    }
+
+    if (!text) {
+      const r = await fetch(API + "/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, query_mode: mode, response_type: "Multiple Paragraphs" }),
+      });
+      const d = await r.json();
+      text = d.response || "";
+      refs = d.references || [];
+    }
+
+    box.innerHTML = esc(text) || '<span class="stat">（无回答）</span>';
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    const refHtml = refs.length
+      ? `<div class="refs">${refs.map(r =>
+          `<span>${esc(r.file_path || r.reference_id)}</span>`).join("")}</div>`
+      : "";
+    push(`<div class="meta"><span>${secs}s</span><span>模式 ${mode}</span></div>${refHtml}`);
+  } catch (e) {
+    box.innerHTML = "";
+    document.getElementById("err").textContent = "请求失败：" + e.message;
+    document.getElementById("err").style.display = "block";
+  } finally {
+    busy = false;
+    document.getElementById("send").disabled = false;
+    document.getElementById("q").focus();
+  }
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+ping().then(ok => ok && loadDocs());
+setInterval(ping, 15000);
+</script>
+</body>
+</html>
