@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>我的知识库</title>
 <!-- 构建标记：改动前端后请更新此值，便于确认浏览器加载的是新版本 -->
-<meta name="build-tag" content="2026-10-11-1700-多轮答案框修复">
+<meta name="build-tag" content="2026-10-11-2105-多轮对话版">
 <style>
   :root {
     --bg: #f7f7f5;
@@ -134,13 +134,19 @@
   <h1>我的知识库</h1>
   <div class="stat" id="stat"></div>
   <div class="spacer"></div>
+  <button id="hbtn" onclick="toggleHistory()" title="开启后，后续提问会带上此前对话，用于消解“它”“上面说的”这类指代">多轮：开</button>
+  <button onclick="clearChat()">清空</button>
   <div class="stat"><span class="dot" id="dot"></span><span id="svc">连接中</span></div>
-  <button onclick="loadDocs()">刷新</button>
+  <button onclick="location.reload()">刷新</button>
 </header>
 <main>
   <aside class="side">
     <h2>检索模式</h2>
     <div class="mode" id="modes"></div>
+    <div class="stat" style="margin-bottom:16px;line-height:1.5">
+      对话上下文 <b id="hcount">0</b> 轮<br>
+      <span style="opacity:.75">历史只用于消解指代，不参与检索</span>
+    </div>
     <h2>文档<span class="tag" id="cnt"></span></h2>
     <div id="docs"></div>
   </aside>
@@ -170,6 +176,12 @@ const MODES = [
 ];
 let mode = "mix";
 let busy = false;
+// 会话历史：每轮 {role, content}。LightRAG 的 conversation_history 只把历史
+// 给 LLM 做上下文理解（用于消解"它""上面说的"这类指代），不参与向量检索。
+let history = [];
+let useHistory = true;
+// 最多带多少轮历史。太长会挤占上下文窗口且拖慢响应，5轮左右够用
+const MAX_HISTORY_TURNS = 5;
 
 document.getElementById("modes").innerHTML = MODES.map(([k, n]) =>
   `<button class="${k === mode ? "on" : ""}" onclick="setMode('${k}')">${n}</button>`
@@ -179,6 +191,21 @@ function setMode(k) {
   mode = k;
   document.querySelectorAll("#modes button").forEach((b, i) =>
     b.classList.toggle("on", MODES[i][0] === k));
+}
+
+function toggleHistory() {
+  useHistory = !useHistory;
+  const b = document.getElementById("hbtn");
+  b.textContent = "多轮：" + (useHistory ? "开" : "关");
+  b.style.background = useHistory ? "var(--accent-soft)" : "";
+  b.style.color = useHistory ? "var(--accent)" : "";
+}
+
+function clearChat() {
+  history = [];
+  document.getElementById("log").innerHTML =
+    '<div class="empty" id="empty"><h3>提问开始</h3><div>知识库会检索你的文档后回答，每个答案都标注来源。</div></div>';
+  document.getElementById("hcount").textContent = "0";
 }
 
 async function ping() {
@@ -244,8 +271,8 @@ function showBuildTag() {
   s.textContent = "build: " + tag;
   document.querySelector("header").appendChild(s);
   console.log("[知识库] 构建版本:", tag);
-  if (tag === "2026-10-11-1700-多轮答案框修复") {
-    console.log("[知识库] 新版本已加载。若答案仍只显示片段，请按 Cmd+Shift+R 强制刷新");
+  if (tag === "2026-10-11-2105-多轮对话版") {
+    console.log("[知识库] 多轮对话版已加载：历史仅用于消解指代，不参与检索");
   }
 }
 
@@ -284,7 +311,12 @@ async function ask(ev) {
     const resp = await fetch(API + "/query/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: q, query_mode: mode, response_type: "Multiple Paragraphs" }),
+      body: JSON.stringify({
+        query: q,
+        query_mode: mode,
+        response_type: "Multiple Paragraphs",
+        conversation_history: useHistory ? history.slice(-MAX_HISTORY_TURNS * 2) : null,
+      }),
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
 
@@ -328,9 +360,14 @@ async function ask(ev) {
       const r = await fetch(API + "/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q, query_mode: mode, response_type: "Multiple Paragraphs" }),
-      });
-      const d = await r.json();
+body: JSON.stringify({
+        query: q,
+        query_mode: mode,
+        response_type: "Multiple Paragraphs",
+        conversation_history: useHistory ? history.slice(-MAX_HISTORY_TURNS * 2) : null,
+      }),
+    });
+    const d = await r.json();
       text = d.response || "";
       refs = d.references || [];
     }
@@ -347,6 +384,15 @@ async function ask(ev) {
         '<div class="warn">知识库里没检索到相关内容，模型转而自由作答了——下面这段<strong>不是</strong>来自你的资料。</div>' +
         box.innerHTML +
         '<div class="hint">提示：提问时带上具体实体（如文档名、技术名）更容易命中。</div>';
+    }
+
+    // 记入历史，供下一轮消解指代。闲聊回答不入历史，否则会污染后续上下文
+    if (text && !chit) {
+      history.push({ role: "user", content: q });
+      history.push({ role: "assistant", content: text });
+      const turns = Math.floor(history.length / 2);
+      const cnt = document.getElementById("hcount");
+      if (cnt) cnt.textContent = turns;
     }
 
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
