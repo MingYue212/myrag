@@ -1,5 +1,8 @@
 # 密钥配置，绝不提交
 .env
+# 备份的 .env 同样含密钥，一并忽略（否则 .env.bak-* 会被 git add . 收进来）
+.env.*
+!.env.example
 
 # 知识库数据（含向量与图谱，通常体积较大）
 data/knowledge/

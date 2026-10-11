@@ -6,11 +6,12 @@
 |---|---|---|---|
 | Embedding | `bge-m3`（1024 维） | **本地** Ollama | 换 API 会导致向量空间不兼容、需重建知识库；本地也避免文档内容外泄 |
 | LLM | 中转站模型 | **API** | 抽取质量决定知识图谱质量，量小但要求高 |
-| Reranker | `gte-rerank-v2` | **API** 阿里云 | 收益最大的一项，交叉编码器精排 |
+| Reranker | `qwen3-rerank` | **API** 阿里云 | 收益最大的一项，交叉编码器精排；需配套补丁，见下文 |
 | VLM | `qwen-vl-max` | **API** 阿里云 | 仅处理 PDF 内嵌图片，日常关闭 |
 
 - 存储：JSON 文件落盘，可直接备份、可 git 管理
 - 服务地址：<http://127.0.0.1:9621>
+- 管理台：<http://127.0.0.1:9621/webui/>（官方自带，含知识图谱可视化）
 
 ## ⚠️ 首次使用必须先配密钥
 
@@ -48,8 +49,9 @@ mv data/knowledge data/knowledge.bak-bge-m3   # 备份而非删除
 ## 快速开始
 
 ```bash
-./scripts/start.sh                     # 启动服务
-open web/index.html                     # 打开网页界面
+./scripts/start.sh                     # 启动服务（会自动修复官方 WebUI 目录）
+open http://127.0.0.1:9621/webui/       # 官方管理台：文档 / 知识图谱 / 检索参数
+open web/index.html                    # 或自建轻量界面
 ./scripts/ingest.sh                    # 扫描 input/ 并入库
 ./scripts/ask.py "你的问题"            # 命令行提问
 ./scripts/list_docs.py                 # 列出文档（删除时需要 doc_id）
@@ -57,13 +59,32 @@ open web/index.html                     # 打开网页界面
 
 ## 网页界面
 
-`web/index.html` 是单文件零依赖界面，双击即可用（无需构建、无需装包）。
+有两套，都可用，按场景选。
+
+### 官方管理台 <http://127.0.0.1:9621/webui/>
+
+LightRAG 自带的完整界面，三个标签页：
+
+- **文档** —— 上传、批量删除、扫描重试、入库流水线，按状态筛选（已完成 / 文件解析 /
+  概念分析 / 图谱处理 / 失败），每篇显示摘要、长度、分块数与时间戳
+- **知识图谱** —— Cytoscape 渲染，支持布局切换、缩放平移、节点搜索、按标签筛选、导出图片
+- **检索** —— 逐项可调并可单独重置：查询模式、KG Top K、文本块 Top K、实体/关系/总词元上限、
+  启用重排、仅靠上下文、仅需提示、流式响应、自定义提示词
+
+纯聊天需求用 <http://127.0.0.1:9621/workspace/>，等价于自建界面的功能。
+
+### 自建界面 `web/index.html`
+
+单文件零依赖，双击即可用（无需构建、无需装包），也可 `open web/index.html`。
 
 - 流式输出，答案逐字呈现
 - 四个检索模式一键切换（综合 / 均衡 / 细节 / 概括）
+- 多轮对话开关，仅用于消解"它""上面说的"这类指代，**不参与检索**
 - 侧栏列出所有文档及状态，点文档名即就该文件提问
 - 每个答案标注来源文件
 - 头部实时显示当前模型配置与服务连接状态
+
+比官方轻、启动快、代码可读可控，纳入 Git 管理；代价是没有图谱和文档管理。
 
 界面通过 `http://127.0.0.1:9621` 调后端，需先启动服务。LightRAG 默认 `CORS Origins: *`，
 所以 `file://` 直接打开不会被拦。
@@ -79,9 +100,14 @@ myrag/
 ├── input/                放要入库的资料：.md / .pdf / 代码文件
 ├── data/knowledge/       知识库数据（备份这个目录即可）
 └── scripts/
-    ├── start.sh          启动服务
+    ├── start.sh          启动服务（含 WebUI 目录自愈 + 输入修复 + rerank 补丁）
     ├── ingest.sh         扫描入库（可传目录批量导入）
-    └── ask.py            提问
+    ├── ask.py            提问
+    ├── list_docs.py      列出文档与 doc_id
+    ├── patch_webui.py        给官方 WebUI 注入中文输入修复（幂等）
+    ├── patch_rerank.py       给 LightRAG 打 qwen3-rerank 协议补丁（幂等）
+    ├── verify_rerank_patch.py 离线校验补丁，不联网不消耗额度
+    └── litrag-input-unlock.user.js  油猴脚本：同上修复，供不想改 site-packages 的人
 ```
 
 ## 放入你自己的资料
@@ -176,9 +202,96 @@ CHUNK_OVERLAP_SIZE=150
 
 本项目已处理。WorkBuddy 会在 `PYTHONPATH` 里注入 sitecustomize钩子，重写 `os.unlink` 走"移到废纸篓"。LightRAG 扫描结束要清理临时库，触发该钩子会因其临时目录不可写而抛 `SystemExit` 带崩服务。`scripts/start.sh` 里已加 `unset PYTHONPATH` 规避。手动启动时务必带上这一行。
 
-**WebUI 打不开？**
+**WebUI 打不开（`/webui` 返回 404）？**
 
-PyPI 版不含前端。需要图形界面就自行构建，或直接用 `http://127.0.0.1:9621/docs` 的 API 文档 + 命令行脚本。
+PyPI 包里**是带前端构建产物**的（React + Cytoscape 图谱 + Mermaid + KaTeX，已内联进产物，离线可用），
+但服务端硬编码去找 `lightrag/api/webui/` 这个目录。该目录一旦被改名或升级时丢失，路由就 404，
+同时 `/health` 里 `webui_available` 会变成 `false`。
+
+`scripts/start.sh` 已在启动前自动修复这种改名情况，无须手工处理。确认状态：
+
+```bash
+curl -s http://127.0.0.1:9621/health | grep -o '"webui_available":[a-z]*'
+```
+
+若显示 `false` 且启动时也没打印"已修复"，说明产物目录确实没了，重装即可：
+
+```bash
+uv tool install --force lightrag-hku
+```
+
+> 注意：这是在 `site-packages` 里改目录名，**每次升级 LightRAG 都可能被覆盖**，所以才需要 `start.sh` 里的自愈逻辑兜底。
+
+**官方界面打中文有问题（回车误提交 / 变成字母且顺序颠倒 / 点不进输入框）？**
+
+这是官方 WebUI 的交互问题，不是输入法坏了，也不是 LightRAG 出错。`query-input` 上有**三个
+独立缺陷**，症状不同、成因也不同，只修其中一个会觉得"没治好"：
+
+1. **组字中按回车，未上屏的拼音被直接提交**
+   官方 keydown 处理只按 Shift 区分「换行 / 提交」，完全没有 IME 判断（整份 bundle 里
+   `isComposing` 出现 **0 次**）。于是你打拼音、按回车想选词上屏，应用却把拼音当成问题发了出去。
+   实测：`isComposing: true` 时派发 Enter，查询真的被提交（`Stop` 按钮出现、输入框被清空）。
+
+2. **生成期间 `query-input` 被 disabled，焦点被丢到 `BODY`**
+   生成答案期间（实测约 8～10 秒）会把 `query-input` 置为 `disabled`，此时点击输入框**完全不生效**。
+   macOS 输入法原本绑定在输入框上，焦点一丢，正在组字的拼音无处安放、缓冲区错位，拼音被当作
+   普通字母提交、顺序颠倒。这就是「第一次打字正常、第二次出问题」——第二次你等不及答案出来
+   就点了输入框。
+
+3. **每次按键都抢焦点、改选区**
+   输入框组件每次按键都在 `requestAnimationFrame` 里执行 `focus()` 与
+   `setSelectionRange(渲染前的旧光标位置)`。组字过程中用旧位置重置选区，会打断或提前提交输入法组字。
+   实测：正常输入 7 个字符触发了 **14 次**这类调用（每键一次 `focus` + 一次 `setSel`）。
+
+**处理**：`scripts/start.sh` 每次启动会自动把修复注入官方入口页（幂等），刷新即生效，无需手工操作。
+注入内容见 `scripts/patch_webui.py`（版本标记 `myrag:ime-fix-v2`）。想确认是否已注入：
+
+```bash
+curl -s http://127.0.0.1:9621/webui/ | grep -o 'myrag:ime-fix-v2'
+```
+
+若不想让服务端改 `site-packages`，也可以改用油猴脚本
+`scripts/litrag-input-unlock.user.js`（逻辑与注入版一致，装一个即可）：
+篡改猴 → 管理面板 → 添加新脚本 → 全选删除默认内容 → 粘贴全文 → 保存。
+
+> 实现上有几个坑：
+> - React 渲染用的是 `setAttribute('disabled','')` 而非 `el.disabled = true`，两条路径都要拦。
+> - 输入框在值里出现换行时会切换成 `<textarea>`，所以 `HTMLInputElement` 与
+>   `HTMLTextAreaElement` 两个原型都要拦，只拦前者会在多行模式下失效。
+> - 拦组字回车用 `stopImmediatePropagation` 而非 `preventDefault`，以免影响输入法自身的提交。
+> - 这些修复只对 `query-input` 生效，图谱 / 文档管理 / 检索参数面板的按钮禁用逻辑不受影响。
+
+> 自建界面 `web/index.html` 没有这些问题——它生成期间只禁用了发送按钮，输入框始终可聚焦，
+> 也没有按键抢焦点、回车不看组字状态的逻辑。
+
+**重排没生效（查询日志里有 `Arrearage` 或 `using original chunks`）？**
+
+先看是哪一类问题：
+
+1. **账户欠费**：阿里云返回 `{"code":"Arrearage"}`。这是最常见的原因，去控制台充值即可。
+   LightRAG 对重排失败是**静默降级**（日志里 `Error during reranking, using original chunks`），
+   界面上完全看不出异常，但检索质量已经掉了——所以要主动查日志：
+
+   ```bash
+   grep -iE "Arrearage|rerank" lightrag.log | tail
+   ```
+
+2. **协议不兼容**：`qwen3-rerank` 与 `gte-rerank-v2` 是两套不同协议（端点、请求体嵌套方式、
+   响应结果位置全都不同），而 LightRAG 1.5.7 的 `ali_rerank` 把 gte 那套硬编码了。
+   不打补丁直接改 `RERANK_MODEL` 会一直静默失败。
+
+   本项目已通过 `scripts/patch_rerank.py` 解决：按模型名分流，qwen3 走 standard 格式与新端点，
+   gte 路径原样保留。补丁在 `site-packages` 内，升级会被覆盖，
+   `scripts/start.sh` 每次启动会自动补回（幂等，失败不阻断启动）。
+
+   离线验证协议（不联网、不消耗额度）：
+
+   ```bash
+   /Users/liushuang/.local/share/uv/tools/lightrag-hku/bin/python scripts/verify_rerank_patch.py
+   ```
+
+   > 改用 qwen3-rerank 的另一个动机：阿里云公告 `gte-rerank`（v1）已于 2026-05-30 下线。
+   > 另外它单次最多 500 篇文档（gte-rerank-v2 是 30000），但个人知识库用不到这个量级。
 
 **如何备份？**
 
