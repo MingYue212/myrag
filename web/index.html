@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>我的知识库</title>
+<!-- 构建标记：改动前端后请更新此值，便于确认浏览器加载的是新版本 -->
+<meta name="build-tag" content="2026-10-11-1400-累加+闲聊检测版">
 <style>
   :root {
     --bg: #f7f7f5;
@@ -97,6 +99,12 @@
     display: block; margin-top: 10px; padding-top: 8px;
     border-top: 1px dashed var(--border); font-size: 12px; color: var(--text-3);
   }
+  .a .warn {
+    background: #fceceb; border: 1px solid #f09595; color: #a32d2d;
+    border-radius: 8px; padding: 9px 12px; font-size: 13px; margin-bottom: 12px;
+  }
+  .a .warn strong { display: inline; margin: 0; color: #a32d2d; }
+  .a .hint { margin-top: 10px; font-size: 12px; color: var(--text-3); }
   .meta { font-size: 12px; color: var(--text-3); margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
   .refs { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
   .refs span {
@@ -227,6 +235,20 @@ function el(tag, cls, html) {
   return e;
 }
 
+// 自检：把构建标记显示到头部。浏览器若显示旧标记，说明加载的是缓存。
+function showBuildTag() {
+  const tag = document.querySelector('meta[name="build-tag"]')?.content || "未知";
+  const s = document.createElement("div");
+  s.className = "stat";
+  s.style.cssText = "font-size:11px;opacity:.6";
+  s.textContent = "build: " + tag;
+  document.querySelector("header").appendChild(s);
+  console.log("[知识库] 构建版本:", tag);
+  if (tag === "2026-10-11-1400-累加+闲聊检测版") {
+    console.log("[知识库] 新版本已加载。若答案仍只显示片段，请按 Cmd+Shift+R 强制刷新");
+  }
+}
+
 function push(html) {
   const log = document.getElementById("log");
   log.querySelector(".empty")?.remove();
@@ -309,6 +331,19 @@ async function ask(ev) {
     }
 
     box.innerHTML = md(text) || '<span class="stat">（无回答）</span>';
+
+    // 识别「检索不到 → 模型退化成闲聊」的情况并显式提示。
+    // 这类回答会绕开知识库（常见于泛化提问），对个人知识库没有参考价值。
+    const chit = text.match(
+      /(我不太清楚|我无法(提供|回答|确定)|作为\s*(claude|gpt|qwen|AI|助手)|我能(帮助|协助)的项目类型|请问您能具体说明|不清楚您(具体)?(指的是|想))/i
+    );
+    if (chit && !refs.length) {
+      box.innerHTML =
+        '<div class="warn">知识库里没检索到相关内容，模型转而自由作答了——下面这段<strong>不是</strong>来自你的资料。</div>' +
+        box.innerHTML +
+        '<div class="hint">提示：提问时带上具体实体（如文档名、技术名）更容易命中。</div>';
+    }
+
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     const refHtml = refs.length
       ? `<div class="refs">${refs.map(r =>
@@ -344,6 +379,7 @@ function md(s) {
   return h;
 }
 
+showBuildTag();
 ping().then(ok => ok && loadDocs());
 setInterval(ping, 15000);
 </script>
