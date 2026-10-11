@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>我的知识库</title>
 <!-- 构建标记：改动前端后请更新此值，便于确认浏览器加载的是新版本 -->
-<meta name="build-tag" content="2026-10-11-1400-累加+闲聊检测版">
+<meta name="build-tag" content="2026-10-11-1700-多轮答案框修复">
 <style>
   :root {
     --bg: #f7f7f5;
@@ -244,17 +244,21 @@ function showBuildTag() {
   s.textContent = "build: " + tag;
   document.querySelector("header").appendChild(s);
   console.log("[知识库] 构建版本:", tag);
-  if (tag === "2026-10-11-1400-累加+闲聊检测版") {
+  if (tag === "2026-10-11-1700-多轮答案框修复") {
     console.log("[知识库] 新版本已加载。若答案仍只显示片段，请按 Cmd+Shift+R 强制刷新");
   }
 }
 
+// 返回新建的 .msg 节点本身，而不是整个日志容器：
+// 若返回容器，调用方用 querySelector(".a") 只会命中日志里**第一个**答案框，
+// 导致第二个问题起的答案覆盖到旧回答、新回答框始终为空。
 function push(html) {
   const log = document.getElementById("log");
   log.querySelector(".empty")?.remove();
-  log.appendChild(el("div", "msg", html));
+  const msg = el("div", "msg", html);
+  log.appendChild(msg);
   log.scrollTop = log.scrollHeight;
-  return log;
+  return msg;
 }
 
 async function ask(ev) {
@@ -268,8 +272,9 @@ async function ask(ev) {
   document.getElementById("err").style.display = "none";
   document.getElementById("q").value = "";
 
-  const log = push(`<div class="q">${esc(q)}</div><div class="a"><span class="cursor"></span></div>`);
-  const box = log.querySelector(".a");
+  const logEl = document.getElementById("log");
+  const msg = push(`<div class="q">${esc(q)}</div><div class="a"><span class="cursor"></span></div>`);
+  const box = msg.querySelector(".a");
   const t0 = Date.now();
   let text = "";
   let refs = [];
@@ -298,7 +303,7 @@ async function ask(ev) {
         // 必须累加，否则只会显示最后一片。
         text += ev.response;
         box.innerHTML = md(text) + '<span class="cursor"></span>';
-        log.scrollTop = log.scrollHeight;
+        logEl.scrollTop = logEl.scrollHeight;
       }
       if (ev.references) refs = ev.references;
       if (ev.error) errMsg = String(ev.error);
