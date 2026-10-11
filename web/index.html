@@ -86,6 +86,17 @@
     border-radius: var(--radius); padding: 14px 18px;
     white-space: pre-wrap; word-break: break-word;
   }
+  .a strong { display: block; font-weight: 500; margin: 10px 0 4px; color: var(--text); }
+  .a strong:first-child { margin-top: 0; }
+  .a b { font-weight: 500; color: var(--accent); }
+  .a code {
+    font-family: var(--font-mono); font-size: 12.5px;
+    background: var(--surface-2); padding: 1px 5px; border-radius: 4px;
+  }
+  .a .srcref {
+    display: block; margin-top: 10px; padding-top: 8px;
+    border-top: 1px dashed var(--border); font-size: 12px; color: var(--text-3);
+  }
   .meta { font-size: 12px; color: var(--text-3); margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
   .refs { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
   .refs span {
@@ -240,6 +251,7 @@ async function ask(ev) {
   const t0 = Date.now();
   let text = "";
   let refs = [];
+  let errMsg = "";
 
   try {
     const resp = await fetch(API + "/query/stream", {
@@ -253,30 +265,37 @@ async function ask(ev) {
     const dec = new TextDecoder();
     let buf = "";
 
+    // 处理一条已完整的行；解析失败则跳过（半行由buf 留待下次）
+    const handle = (line) => {
+      const s = line.trim().replace(/^data:\s*/, "");
+      if (!s || s === "[DONE]") return;
+      let ev;
+      try { ev = JSON.parse(s); } catch { return; }
+      if (typeof ev.response === "string") {
+        // 关键：该接口每个事件只推送**增量片段**，不是累积全文。
+        // 必须累加，否则只会显示最后一片。
+        text += ev.response;
+        box.innerHTML = md(text) + '<span class="cursor"></span>';
+        log.scrollTop = log.scrollHeight;
+      }
+      if (ev.references) refs = ev.references;
+      if (ev.error) errMsg = String(ev.error);
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
 
-      // 该服务的流式返回是裸 JSON（每行一个），并非标准 SSE，
+      // 该服务返回的是裸 JSON（每行一个），并非标准 SSE，
       // 所以不能按 data: 前缀切分，要按行解析并处理跨 chunk 截断
       const lines = buf.split("\n");
       buf = lines.pop();
-
-      for (const line of lines) {
-        const s = line.trim().replace(/^data:\s*/, "");
-        if (!s || s === "[DONE]") continue;
-        let ev;
-        try { ev = JSON.parse(s); } catch { continue; }
-        if (typeof ev.response === "string") {
-          text = ev.response;
-          box.innerHTML = esc(text) + '<span class="cursor"></span>';
-          log.scrollTop = log.scrollHeight;
-        }
-        if (ev.references) refs = ev.references;
-        if (ev.error) throw new Error(String(ev.error));
-      }
+      for (const line of lines) handle(line);
     }
+    // 流结束时 buf 可能还残留最后一行（无结尾换行符）
+    if (buf.trim()) handle(buf);
+    if (errMsg) throw new Error(errMsg);
 
     if (!text) {
       const r = await fetch(API + "/query", {
@@ -289,7 +308,7 @@ async function ask(ev) {
       refs = d.references || [];
     }
 
-    box.innerHTML = esc(text) || '<span class="stat">（无回答）</span>';
+    box.innerHTML = md(text) || '<span class="stat">（无回答）</span>';
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     const refHtml = refs.length
       ? `<div class="refs">${refs.map(r =>
@@ -309,6 +328,20 @@ async function ask(ev) {
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+// 先转义再渲染 Markdown，避免注入。支持的语法够用即可：
+// ##标题、**粗体**、`代码`、- 列表、### References 段落
+function md(s) {
+  let h = esc(s);
+  h = h.replace(/^### (References|参考)/gim, '<div class="srcref">$1</div>');
+  h = h.replace(/^#{1,4}\s+(.+)$/gm, '<strong>$1</strong>');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  h = h.replace(/^- (.+)$/gm, '· $1');
+  h = h.replace(/^\[(\d+)\]\s*(.+)$/gm, '<span class="srcref">[$1] $2</span>');
+  h = h.replace(/\n{3,}/g, "\n\n");
+  return h;
 }
 
 ping().then(ok => ok && loadDocs());
