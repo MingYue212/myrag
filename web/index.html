@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>我的知识库</title>
 <!-- 构建标记：改动前端后请更新此值，便于确认浏览器加载的是新版本 -->
-<meta name="build-tag" content="2026-10-11-2105-多轮对话版">
+<meta name="build-tag" content="2026-10-11-2250-中文输入修复版">
 <style>
   :root {
     --bg: #f7f7f5;
@@ -271,8 +271,8 @@ function showBuildTag() {
   s.textContent = "build: " + tag;
   document.querySelector("header").appendChild(s);
   console.log("[知识库] 构建版本:", tag);
-  if (tag === "2026-10-11-2105-多轮对话版") {
-    console.log("[知识库] 多轮对话版已加载：历史仅用于消解指代，不参与检索");
+  if (tag === "2026-10-11-2250-中文输入修复版") {
+    console.log("[知识库] 中文输入修复版已加载：IME 组字期间不再被 focus 打断");
   }
 }
 
@@ -408,8 +408,20 @@ body: JSON.stringify({
   } finally {
     busy = false;
     document.getElementById("send").disabled = false;
-    document.getElementById("q").focus();
+    focusInput();
   }
+}
+
+// 只在输入框**未聚焦**时才恢复焦点。
+// 不能无条件 focus()：流式响应要跑十几秒，这期间用户往往已经在输入下一条问题了。
+// 此时程序调用 focus() 会打断输入法的组字状态——拼音被提前提交、缓冲区错位，
+// 表现为「第二次打中文变成字母，且顺序颠倒」。
+// 官方 WebUI 处理同一问题用的是 isComposing / keyCode===229 判据，
+// 这里改用更直接的 activeElement 判断，效果等价且不依赖按键细节。
+function focusInput() {
+  const q = document.getElementById("q");
+  if (document.activeElement === q) return;
+  q.focus();
 }
 
 function esc(s) {
