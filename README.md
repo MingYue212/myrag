@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Embedding | `bge-m3`（1024 维） | **本地** Ollama | 换 API 会导致向量空间不兼容、需重建知识库；本地也避免文档内容外泄 |
 | LLM | 中转站模型 | **API** | 抽取质量决定知识图谱质量，量小但要求高 |
-| Reranker | `qwen3-rerank` | **API** 阿里云 | 收益最大的一项，交叉编码器精排；需配套补丁，见下文 |
+| Reranker | `bge-reranker-v2-m3` | **本地** llama.cpp | 收益最大的一项，交叉编码器精排；零 API 成本 |
 | VLM | `qwen-vl-max` | **API** 阿里云 | 仅处理 PDF 内嵌图片，日常关闭 |
 
 - 存储：JSON 文件落盘，可直接备份、可 git 管理
@@ -49,13 +49,37 @@ mv data/knowledge data/knowledge.bak-bge-m3   # 备份而非删除
 ## 快速开始
 
 ```bash
-./scripts/start.sh                     # 启动服务（会自动修复官方 WebUI 目录）
+./scripts/rerank.sh                    # 启动本地重排（终端 A，前台运行）
+./scripts/start.sh                     # 启动服务（终端 B）
 open http://127.0.0.1:9621/webui/       # 官方管理台：文档 / 知识图谱 / 检索参数
-open web/index.html                    # 或自建轻量界面
 ./scripts/ingest.sh                    # 扫描 input/ 并入库
 ./scripts/ask.py "你的问题"            # 命令行提问
 ./scripts/list_docs.py                 # 列出文档（删除时需要 doc_id）
 ```
+
+## 本地重排
+
+重排不依赖任何云 API，用 **llama.cpp + bge-reranker-v2-m3**（Q8_0 量化，606MB，在 `models/`）。
+llama.cpp 的 `/v1/rerank` 端点是 Jina 兼容的，正好对上 LightRAG 的 `jina` binding，无需写适配代码。
+
+```bash
+./scripts/rerank.sh     # 前台启动，Ctrl+C 停；已在运行会直接提示退出
+```
+
+`.env` 对应配置：
+
+```
+RERANK_BINDING=jina
+RERANK_MODEL=bge-reranker-v2-m3
+RERANK_BINDING_HOST=http://127.0.0.1:8012/v1/rerank
+MIN_RERANK_SCORE=-6
+```
+
+模型下载（国内走 hf-mirror，直连 huggingface.co 会超时）：
+<https://hf-mirror.com/gpustack/bge-reranker-v2-m3-GGUF>，放到 `models/` 即可。
+
+> `bge-m3`（embedding，双编码器）和 `bge-reranker-v2-m3`（重排，交叉编码器）是两个不同的模型，
+> Ollama 里的 `bge-m3` 不能用来做重排，必须单独下 GGUF 权重。
 
 ## 网页界面
 
@@ -99,13 +123,15 @@ myrag/
 ├── .env                  配置（模型、检索参数、存储）
 ├── input/                放要入库的资料：.md / .pdf / 代码文件
 ├── data/knowledge/       知识库数据（备份这个目录即可）
+├── models/               本地模型权重（GGUF，已 gitignore）
 └── scripts/
     ├── start.sh          启动服务（含 WebUI 目录自愈 + 输入修复 + rerank 补丁）
+    ├── rerank.sh         启动本地重排服务（llama.cpp，与 start.sh 并行）
     ├── ingest.sh         扫描入库（可传目录批量导入）
     ├── ask.py            提问
     ├── list_docs.py      列出文档与 doc_id
     ├── patch_webui.py        给官方 WebUI 注入中文输入修复（幂等）
-    ├── patch_rerank.py       给 LightRAG 打 qwen3-rerank 协议补丁（幂等）
+    ├── patch_rerank.py       给 LightRAG 打 qwen3-rerank 协议补丁（幂等，供切回云端用）
     ├── verify_rerank_patch.py 离线校验补丁，不联网不消耗额度
     └── litrag-input-unlock.user.js  油猴脚本：同上修复，供不想改 site-packages 的人
 ```
@@ -264,34 +290,73 @@ curl -s http://127.0.0.1:9621/webui/ | grep -o 'myrag:ime-fix-v2'
 > 自建界面 `web/index.html` 没有这些问题——它生成期间只禁用了发送按钮，输入框始终可聚焦，
 > 也没有按键抢焦点、回车不看组字状态的逻辑。
 
-**重排没生效（查询日志里有 `Arrearage` 或 `using original chunks`）？**
+**重排没生效（查询日志里有 `using original chunks`）？**
 
-先看是哪一类问题：
+本项目重排已改成本地（llama.cpp + bge-reranker-v2-m3），不消耗额度也不受欠费影响。
+LightRAG 对重排失败是**静默降级**（日志里 `Error during reranking, using original chunks`），
+界面上完全看不出异常，但检索质量已经掉了——所以要主动查日志：
 
-1. **账户欠费**：阿里云返回 `{"code":"Arrearage"}`。这是最常见的原因，去控制台充值即可。
-   LightRAG 对重排失败是**静默降级**（日志里 `Error during reranking, using original chunks`），
-   界面上完全看不出异常，但检索质量已经掉了——所以要主动查日志：
+```bash
+grep -iE "Successfully reranked|using original chunks" lightrag.log | tail
+```
+
+- `Successfully reranked: N chunks from M original chunks` → **生效**
+- `using original chunks` → 又降级了，按下面排查
+
+**重排没生效怎么排查？**
+
+1. **本地重排服务没起**：先跑 `./scripts/rerank.sh`（前台），另开终端再跑 `./scripts/start.sh`。
+   两个都得活着，LightRAG 是客户端，不会在需要时自动拉起它。
+
+2. **batch size 太小（最常见）**：llama.cpp 默认 `ubatch=512`，而 RAG 切片拼上 query 后
+   常超过 1000 token，会直接返回 500：
 
    ```bash
-   grep -iE "Arrearage|rerank" lightrag.log | tail
+   grep "too large to process" lightrag.log
    ```
 
-2. **协议不兼容**：`qwen3-rerank` 与 `gte-rerank-v2` 是两套不同协议（端点、请求体嵌套方式、
-   响应结果位置全都不同），而 LightRAG 1.5.7 的 `ali_rerank` 把 gte 那套硬编码了。
-   不打补丁直接改 `RERANK_MODEL` 会一直静默失败。
+   `scripts/rerank.sh` 里已设 `-b 8192 -ub 4096`，若改过这个值要注意别调回去。
 
-   本项目已通过 `scripts/patch_rerank.py` 解决：按模型名分流，qwen3 走 standard 格式与新端点，
-   gte 路径原样保留。补丁在 `site-packages` 内，升级会被覆盖，
-   `scripts/start.sh` 每次启动会自动补回（幂等，失败不阻断启动）。
+3. **`MIN_RERANK_SCORE` 量纲**：本地返回的是**未归一化的 logit**，大致 -11 ~ +10，
+   不是 0~1。原本的 `0.3`（按阿里云归一化分数设的）会误杀大量切片：
+   实测「知识管理平台的设计思路」61 个候选只剩 **2 个**进上下文（阈值调到 -6 后全部保留）。
+   现在设的是 `-6`，即只滤掉几乎完全无关的片段，重排专注做排序。
+   换算参考：logit 0 ≈ 50% 相关，logit 3 ≈ 95%。
 
-   离线验证协议（不联网、不消耗额度）：
+> 判断重排是否真的生效，别看界面，看日志：
+>
+> ```bash
+> grep -iE "Successfully reranked|Rerank filtering|using original chunks" lightrag.log | tail
+> ```
+>
+> - `Successfully reranked: N chunks from M original chunks` → **生效**
+> - `Rerank filtering: K chunks remained` → 阈值又砍掉了 `15-K` 个，K 太小就是阈值配错了
+> - `using original chunks` → 降级了，按上面排查
 
-   ```bash
-   /Users/liushuang/.local/share/uv/tools/lightrag-hku/bin/python scripts/verify_rerank_patch.py
-   ```
+## 查询耗时实测
 
-   > 改用 qwen3-rerank 的另一个动机：阿里云公告 `gte-rerank`（v1）已于 2026-05-30 下线。
-   > 另外它单次最多 500 篇文档（gte-rerank-v2 是 30000），但个人知识库用不到这个量级。
+16GB M4 / 21 篇文档，实测各环节：
+
+| 环节 | 耗时 | 占比 |
+|---|---|---|
+| 云端 LLM（`claude-sonnet-5` @ 中转站） | **1.5s 仅网络往返**，生成答案按输出长度计 | **主要瓶颈** |
+| 关键词提取（mix 模式额外一次 LLM） | 2.7s | mix 模式才有 |
+| Ollama `bge-m3` embedding | 1.1s | 可忽略 |
+| 本地 rerank（15 篇切片） | **0.16s** | 可忽略 |
+
+一次 mix 查询通常 11～20s，其中 **九成以上在等云端 LLM**，本地检索与重排加起来不到 2s。
+所以"回复慢"不是本地组件的问题，要提速只能换更快的 LLM 模型或减小输出长度。
+
+> 实测 `local` 模式反而比 `mix` 慢（32s vs 16s）：local 会把更完整的切片塞进上下文，
+> LLM 要读更多 token。想靠切模式提速是行不通的。
+>
+> 另注意 LightRAG 开了 `enable_llm_cache`，**重复的 query 会直接命中缓存**（亚秒返回）。
+> 测真实耗时时别拿重复 query，否则会被缓存误导。
+
+> 若想换回云端重排：`scripts/patch_rerank.py` 仍在，它给 `ali_rerank` 加了 qwen3 协议支持
+> （qwen3 与 gte 的端点、请求体嵌套、响应位置全不同，LightRAG 只硬编码了后者）。
+> 补丁在 `site-packages` 内，升级会被覆盖，`start.sh` 每次启动自动补回（幂等）。
+> 离线验证协议：`python scripts/verify_rerank_patch.py`（不联网、不消耗额度）。
 
 **如何备份？**
 

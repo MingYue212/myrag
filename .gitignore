@@ -22,3 +22,5 @@ __pycache__/
 # 编辑器
 .DS_Store
 .idea/
+# 本地模型权重（GGUF），体积大不入库
+models/
