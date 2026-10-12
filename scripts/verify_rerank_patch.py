@@ -102,6 +102,73 @@ async def main() -> int:
         print(f"  {'PASS' if passed else 'FAIL'}  {name}")
         ok = ok and passed
 
+    print("\n=== C. 归一化 + 断崖检测 ===")
+    from lightrag.rerank import (
+        myrag_cliff_cutoff,
+        myrag_normalize_scores,
+        myrag_postprocess,
+    )
+
+    def mk(scores):
+        return [{"index": i, "relevance_score": s} for i, s in enumerate(scores)]
+
+    # 已在 0~1 的分数不能被压缩（换回云端模型时同样适用）
+    kept = myrag_normalize_scores(mk([0.9, 0.5, 0.1]))
+    # logit 越界时归一化
+    normed = myrag_normalize_scores(mk([6.0, 2.2, -11.0]))
+    # 有断崖：0.457 -> 0.168 那种陡降
+    cliff_res = myrag_cliff_cutoff(
+        myrag_normalize_scores(mk([-0.2, -0.4, -1.6, -1.6, -1.7, -2.2, -2.2, -2.6, -2.9, -3.1])),
+        top_n=15,
+    )
+    # 无断崖：平缓衰减，必须全保留
+    flat_res = myrag_cliff_cutoff(
+        myrag_normalize_scores(mk([-1.4, -2.0, -2.5, -3.5, -4.2, -4.7, -4.7, -4.9, -5.0, -5.0])),
+        top_n=15,
+    )
+    # 保底：首尾落差极大也不能只剩 1 个
+    floor_res = myrag_cliff_cutoff(myrag_normalize_scores(mk([9.0, -9.0, -9.1, -9.2, -9.3])), top_n=10)
+    # 样本太少不乱切
+    tiny_res = myrag_cliff_cutoff(myrag_normalize_scores(mk([1.0, -5.0, -6.0])), top_n=10)
+    e2e = myrag_postprocess(
+        myrag_normalize_scores(mk([-0.2, -0.4, -1.6, -1.6, -1.7, -2.2, -2.2, -2.6, -2.9, -3.1])),
+        top_n=15,
+    )
+
+    algo_checks = [
+        ("已在 0~1 的分数不被改动（云端模型兼容）",
+         abs(kept[0]["relevance_score"] - 0.9) < 1e-9),
+        ("越界的 logit 被归一化到 0~1",
+         all(0.0 <= x["relevance_score"] <= 1.0 for x in normed)),
+        ("检出断崖并截断", cliff_res[1] is not None and cliff_res[0] < 10),
+        ("无断崖时全部保留（不误杀）", flat_res[0] == 10 and flat_res[1] is None),
+        ("断崖再深也至少保留 3 条", floor_res[0] >= 3),
+        ("样本过少时不乱切", tiny_res[0] == 3 and tiny_res[1] is None),
+        ("端到端：已归一化且已截断",
+         len(e2e) < 10 and all(0.0 <= x["relevance_score"] <= 1.0 for x in e2e)),
+    ]
+    for name, passed in algo_checks:
+        print(f"  {'PASS' if passed else 'FAIL'}  {name}")
+        ok = ok and passed
+
+    print("\n=== D. 断崖检测已接入 rerank 分发 ===")
+    server_src = None
+    try:
+        import lightrag.api.lightrag_server as srv
+        server_src = Path(srv.__file__).read_text(encoding="utf-8")
+    except Exception:
+        pass
+    dispatch_checks = [
+        ("服务端已打补丁", server_src is not None and "myrag:qwen3-rerank-support" in server_src),
+        ("jina binding 包了后处理",
+         server_src is not None and "myrag_wrap_rerank(jina_rerank)" in server_src),
+        ("cohere binding 也包了后处理",
+         server_src is not None and "myrag_wrap_rerank(cohere_rerank)" in server_src),
+    ]
+    for name, passed in dispatch_checks:
+        print(f"  {'PASS' if passed else 'FAIL'}  {name}")
+        ok = ok and passed
+
     print("\n结论：" + ("全部通过" if ok else "存在失败项"))
     return 0 if ok else 1
 
